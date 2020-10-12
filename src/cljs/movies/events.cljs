@@ -12,9 +12,17 @@
 (defn add-starting-slash [path]
   (if (clojure.string/starts-with? path "/") path (str "/" path)))
 
-(defn the-movie-database-uri [path api-key]
-  (let [path (add-starting-slash path)]
-    (str "https://api.themoviedb.org/3" path "?api_key=" api-key)))
+(defn query-params-str [query-params]
+  (clojure.string/join "&" (map (fn [[k v]] (str (name k) "=" v)) query-params)))
+
+(defn the-movie-database-uri
+  ([path api-key]
+   (the-movie-database-uri path api-key {}))
+  ([path api-key query-params]
+   (let [path         (add-starting-slash path)
+         query-params (assoc query-params :api_key api-key)
+         query-params (query-params-str query-params)]
+     (str "https://api.themoviedb.org/3" path "?" query-params))))
 
 (re-frame/reg-event-fx
   ::load-images-config
@@ -37,8 +45,41 @@
   (fn [db [_ result]]
     (assoc db :images-config-error result)))
 
+;; SEARCH MOVIES
+(re-frame/reg-event-fx
+  ::search-movies
+  (fn [{:keys [db]} [_ term]]
+    {:http-xhrio {:method          :get
+                  :uri             (the-movie-database-uri "/search/movie" api-key {:query term})
+                  :timeout         3000
+                  :response-format (ajax/json-response-format {:keywords? true})
+                  :on-success      [:search-result-ok term]
+                  :on-failure      [:load-images-config-error]}})) ;; TODO: Error handling
 
+(defn ->movie [movie]
+  {:id           (:id movie)
+   :vote-average (:vote_average movie)
+   :title        (:title movie)
+   :poster-path  (:poster_path movie)})
 
+(defn ->search-result [result]
+  (let [movies (map ->movie (:results result))]
+    {:page          (:page result)
+     :total-results (:total_results result)
+     :total-pages   (:total_pages result)
+     :search-term   (:term result)
+     :movies        movies}))
+
+(re-frame/reg-event-db
+  :search-result-ok
+  (fn [db [_ term result]]
+    (assoc db :search-result (->search-result (assoc result :term term)))))
+
+(re-frame/reg-event-db
+  ::add-to-favorites
+  (fn-traced [db [_ movie-id]]
+             (update db :favorites (fnil conj #{}) movie-id)))
+;; search movies
 
 (re-frame/reg-event-db
   ::initialize-db
